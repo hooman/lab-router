@@ -1,0 +1,28 @@
+router:
+  hostname: router1
+  domain: lab.test
+  wan:
+    mode: dhcp
+    switch: "PCI 1G Port 1"
+  lans:
+    - name: servers
+      switch: Lab-Servers
+      interface: eth1
+      address: 10.10.10.1/24
+      dhcp:
+        range: 10.10.10.100-10.10.10.200
+        reservations:
+          - name: server1
+            mac: 00:15:5D:0A:0A:10
+            ip: 10.10.10.10
+      dns:
+        delegations: []
+    - name: clients
+      switch: Lab-Clients
+      interface: eth2
+      address: 10.10.20.1/24
+      dhcp:
+        range: 10.10.20.100-10.10.20.200
+        reservations: []
+      dns:
+        delegations: []
