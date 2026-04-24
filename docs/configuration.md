@@ -4,35 +4,37 @@ The router should stay focused: route lab networks, provide DHCP/DNS, NAT to a
 WAN, and make common lab reconfiguration fast. It should not grow into a full
 general-purpose network appliance.
 
-## Current Model
+## Inputs to the Stager
 
-Today `scripts/stage-router-artifacts.sh` accepts command-line options:
+`scripts/stage-router-artifacts.sh` accepts, in resolution order:
 
-- router hostname and domain
-- LAN IP and prefix
-- DHCP pool start/end
-- SSH public key
-- output staging directory
-- optional dnsmasq snippet
+1. **CLI flags** (highest priority): `--hostname`, `--lan-ip`, `--lan-prefix`,
+   `--domain`, `--dhcp-start`, `--dhcp-end`, `--user`, `--pubkey`,
+   `--stage-dir`.
+2. **`--config YAML`** (requires `yq`): single-LAN configs fill in any field
+   the CLI didn't set, and render DHCP reservations + DNS delegations as
+   dnsmasq lines. Multi-LAN configs are rejected for now.
+3. **`--extra-dnsmasq FILE`**: raw dnsmasq snippet, appended to whatever the
+   YAML rendered.
+4. **Hardcoded defaults** (lowest priority): router1 / 10.10.10.1 / 24 /
+   lab.test / current macOS user / ~/.ssh/id_ed25519.pub / /Volumes/ISO.
 
-The optional dnsmasq snippet is how callers add reservations and DNS
-delegations for a specific lab.
+## YAML Schema
 
-## Target Model
-
-The next iteration should render from a small YAML file:
+The implemented shape (single-LAN only today):
 
 ```yaml
 router:
   hostname: router1
   domain: lab.test
+  user: hooman           # optional; defaults to `id -un` on the Mac
   wan:
     mode: dhcp
-    switch: "PCI 1G Port 1"
+    switch: "PCI 1G Port 1"    # read by Hyper-V helper, not stager
   lans:
     - name: lab
-      switch: Lab-NAT
-      interface: eth1
+      switch: Lab-NAT          # read by Hyper-V helper, not stager
+      interface: eth1          # informational
       address: 10.10.10.1/24
       dhcp:
         range: 10.10.10.100-10.10.10.200
@@ -48,6 +50,19 @@ router:
           - zone: lab.test
             servers: [10.10.10.10, 10.10.10.20]
 ```
+
+Fields the stager actually reads: `router.hostname`, `router.domain`,
+`router.user`, `router.lans[0].address`, `router.lans[0].dhcp.range`,
+`router.lans[0].dhcp.reservations`, `router.lans[0].dns.delegations`.
+Other fields (`wan.switch`, `lans[*].switch`, `lans[*].interface`) are
+reserved for the Hyper-V helper script and for future multi-LAN support.
+
+## Not Yet Implemented
+
+Multi-LAN YAMLs like
+[`configs/multi-subnet-example.yaml`](../configs/multi-subnet-example.yaml)
+parse but are rejected by the stager. The planned expansion is a separate
+`eth<N>` interface per LAN plus matching dhcp-range / nftables rules.
 
 VLANs should be explicit and boring:
 

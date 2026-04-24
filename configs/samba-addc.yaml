@@ -1,0 +1,36 @@
+# YAML config for the Samba AD DC lab router. Consumed by
+# scripts/stage-router-artifacts.sh via --config. Fields not set here
+# fall back to CLI flags and then to script defaults.
+#
+# Schema is documented in docs/configuration.md. Currently only single-LAN
+# configs are supported by the stager.
+router:
+  hostname: router1
+  domain: lab.test
+  wan:
+    mode: dhcp
+    switch: "PCI 1G Port 1"
+  lans:
+    - name: lab
+      switch: Lab-NAT
+      interface: eth1
+      address: 10.10.10.1/24
+      dhcp:
+        range: 10.10.10.100-10.10.10.200
+        reservations:
+          - name: WS2025-DC1
+            mac: 00:15:5D:0A:0A:0A
+            ip: 10.10.10.10
+          - name: samba-dc1
+            mac: 00:15:5D:0A:0A:14
+            ip: 10.10.10.20
+          - name: samba-dc2
+            mac: 00:15:5D:0A:0A:15
+            ip: 10.10.10.21
+          - name: samba-dc3
+            mac: 00:15:5D:0A:0A:16
+            ip: 10.10.10.22
+      dns:
+        delegations:
+          - zone: lab.test
+            servers: [10.10.10.10, 10.10.10.20]

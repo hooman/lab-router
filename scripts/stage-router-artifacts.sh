@@ -25,18 +25,24 @@
 #===============================================================================
 set -euo pipefail
 
-# defaults
-HOSTNAME='router1'
-LAN_IP='10.10.10.1'
-LAN_PREFIX='24'
-DOMAIN='lab.test'
-DHCP_START=''   # auto-derived if empty
+# Resolution order for each setting (highest priority first):
+#   1. CLI flag
+#   2. --config YAML file
+#   3. hardcoded default applied at the end
+#
+# Unset values are kept empty until post-parse so we can tell which source
+# supplied what.
+HOSTNAME=''
+LAN_IP=''
+LAN_PREFIX=''
+DOMAIN=''
+DHCP_START=''
 DHCP_END=''
-USERNAME="$(id -un)"
-SSH_PUBKEY_FILE="$HOME/.ssh/id_ed25519.pub"
-STAGE_DIR='/Volumes/ISO'
+USERNAME=''
+CONFIG_FILE=''
+SSH_PUBKEY_FILE=''
+STAGE_DIR=''
 DEBIAN_URL='https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2'
-EXTRA_DNSMASQ=''
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SEED_SRC="$REPO_DIR/templates/cloud-init"
@@ -48,27 +54,36 @@ usage() {
     cat <<EOF
 
 Options:
-  -n, --hostname NAME      router hostname (default: $HOSTNAME)
-  -i, --lan-ip IP          router LAN IP (default: $LAN_IP)
-  -p, --lan-prefix N       LAN CIDR prefix length (default: $LAN_PREFIX)
-  -d, --domain NAME        DNS search domain (default: $DOMAIN)
+  -c, --config FILE        YAML config (see configs/*.yaml and
+                           docs/configuration.md). Supplies defaults for
+                           the options below; CLI flags still override.
+                           Also renders DHCP reservations + DNS delegations
+                           from the YAML into the router's dnsmasq config.
+                           Requires yq (brew install yq).
+  -n, --hostname NAME      router hostname (default: router1)
+  -i, --lan-ip IP          router LAN IP (default: 10.10.10.1)
+  -p, --lan-prefix N       LAN CIDR prefix length (default: 24)
+  -d, --domain NAME        DNS search domain (default: lab.test)
       --dhcp-start IP      DHCP pool start (default: derive .100 of subnet)
       --dhcp-end IP        DHCP pool end   (default: derive .200 of subnet)
   -u, --user NAME          admin username to create on the router
-                           (default: current user, $USERNAME)
-  -k, --pubkey FILE        SSH public key path (default: $SSH_PUBKEY_FILE)
-  -s, --stage-dir DIR      staging dir (default: $STAGE_DIR)
-      --extra-dnsmasq FILE file whose content is inlined into dnsmasq config
-                           (for DHCP reservations + DNS delegations)
+                           (default: current macOS user, $(id -un))
+  -k, --pubkey FILE        SSH public key path (default: ~/.ssh/id_ed25519.pub)
+  -s, --stage-dir DIR      staging dir (default: /Volumes/ISO)
+      --extra-dnsmasq FILE append raw dnsmasq snippet (merged with YAML
+                           reservations/delegations if --config is also set)
   -h, --help               show this
 
-Example: scripts/stage-router-artifacts.sh --extra-dnsmasq configs/samba-addc.dnsmasq.conf
+Examples:
+  scripts/stage-router-artifacts.sh --config configs/samba-addc.yaml
+  scripts/stage-router-artifacts.sh --extra-dnsmasq configs/samba-addc.dnsmasq.conf
 EOF
 }
 
 # parse args
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -c|--config)      CONFIG_FILE="$2";     shift 2 ;;
         -n|--hostname)    HOSTNAME="$2";        shift 2 ;;
         -i|--lan-ip)      LAN_IP="$2";          shift 2 ;;
         -p|--lan-prefix)  LAN_PREFIX="$2";      shift 2 ;;
@@ -83,6 +98,62 @@ while [[ $# -gt 0 ]]; do
         *)                die "unknown arg: $1" ;;
     esac
 done
+
+# Values from YAML fill in anything CLI flags didn't set. dnsmasq-relevant
+# fields (reservations, delegations) are rendered into YAML_DNSMASQ_BLOCK
+# below and merged with --extra-dnsmasq content. Only single-LAN configs
+# are supported for now; multi-LAN YAMLs error out cleanly.
+YAML_DNSMASQ_BLOCK=''
+if [[ -n "$CONFIG_FILE" ]]; then
+    command -v yq >/dev/null || die "--config requires yq (brew install yq)"
+    [[ -f "$CONFIG_FILE" ]] || die "config not found: $CONFIG_FILE"
+
+    lan_count=$(yq '.router.lans | length' "$CONFIG_FILE")
+    [[ "$lan_count" == "1" ]] \
+        || die "--config currently supports single-LAN YAML only (got $lan_count LANs)"
+
+    yq_opt() { yq -r "$1 // \"\"" "$CONFIG_FILE"; }
+
+    [[ -z "$HOSTNAME"   ]] && HOSTNAME=$(yq_opt '.router.hostname')
+    [[ -z "$DOMAIN"     ]] && DOMAIN=$(yq_opt   '.router.domain')
+    [[ -z "$USERNAME"   ]] && USERNAME=$(yq_opt '.router.user')
+
+    addr=$(yq_opt '.router.lans[0].address')   # "10.10.10.1/24"
+    if [[ -n "$addr" ]]; then
+        [[ -z "$LAN_IP"     ]] && LAN_IP="${addr%/*}"
+        [[ -z "$LAN_PREFIX" ]] && LAN_PREFIX="${addr#*/}"
+    fi
+
+    range=$(yq_opt '.router.lans[0].dhcp.range')   # "10.10.10.100-10.10.10.200"
+    if [[ -n "$range" ]]; then
+        [[ -z "$DHCP_START" ]] && DHCP_START="${range%-*}"
+        [[ -z "$DHCP_END"   ]] && DHCP_END="${range#*-}"
+    fi
+
+    # Render reservations into dhcp-host= lines.
+    reservations=$(yq -r '.router.lans[0].dhcp.reservations // [] | .[] |
+        "dhcp-host=" + .mac + "," + .name + "," + .ip + ",infinite"' \
+        "$CONFIG_FILE")
+    # Render DNS delegations into server=/zone/ip lines, one per server.
+    delegations=$(yq -r '.router.lans[0].dns.delegations // [] | .[] |
+        .zone as $z | .servers[] |
+        "server=/" + $z + "/" + .' "$CONFIG_FILE")
+
+    if [[ -n "$reservations" || -n "$delegations" ]]; then
+        YAML_DNSMASQ_BLOCK="# rendered from $CONFIG_FILE"
+        [[ -n "$reservations" ]] && YAML_DNSMASQ_BLOCK+=$'\n'"$reservations"
+        [[ -n "$delegations"  ]] && YAML_DNSMASQ_BLOCK+=$'\n'"$delegations"
+    fi
+fi
+
+# Hardcoded fallbacks - only apply to anything still empty after CLI + YAML.
+[[ -z "$HOSTNAME"        ]] && HOSTNAME='router1'
+[[ -z "$LAN_IP"          ]] && LAN_IP='10.10.10.1'
+[[ -z "$LAN_PREFIX"      ]] && LAN_PREFIX='24'
+[[ -z "$DOMAIN"          ]] && DOMAIN='lab.test'
+[[ -z "$USERNAME"        ]] && USERNAME="$(id -un)"
+[[ -z "$SSH_PUBKEY_FILE" ]] && SSH_PUBKEY_FILE="$HOME/.ssh/id_ed25519.pub"
+[[ -z "$STAGE_DIR"       ]] && STAGE_DIR='/Volumes/ISO'
 
 # sanity
 command -v qemu-img >/dev/null || die "qemu-img not on PATH (brew install qemu)"
@@ -110,12 +181,25 @@ PUBKEY_CONTENT="$(tr -d '\n' < "$SSH_PUBKEY_FILE")"
 IFS='.' read -r a b c _d <<< "$LAN_IP"
 LAN_SUBNET_CIDR="${a}.${b}.${c}.0/${LAN_PREFIX}"
 
-# Optional extra dnsmasq content (dhcp-host reservations, DNS delegations)
-EXTRA_DNSMASQ_BLOCK=''
+# Merge dnsmasq content from (a) YAML-rendered reservations/delegations and
+# (b) --extra-dnsmasq raw snippet. Both get the same 6-space indent so they
+# nest under the write_files block.
+raw_dnsmasq=''
+if [[ -n "$YAML_DNSMASQ_BLOCK" ]]; then
+    raw_dnsmasq="$YAML_DNSMASQ_BLOCK"
+fi
 if [[ -n "${EXTRA_DNSMASQ_FILE:-}" ]]; then
     [[ -f "$EXTRA_DNSMASQ_FILE" ]] || die "extra-dnsmasq file not found: $EXTRA_DNSMASQ_FILE"
-    # Prefix each line with 6 spaces so it nests cleanly under the write_files block
-    EXTRA_DNSMASQ_BLOCK="$(sed 's/^/      /' "$EXTRA_DNSMASQ_FILE")"
+    extra="$(cat "$EXTRA_DNSMASQ_FILE")"
+    if [[ -n "$raw_dnsmasq" ]]; then
+        raw_dnsmasq+=$'\n'"$extra"
+    else
+        raw_dnsmasq="$extra"
+    fi
+fi
+EXTRA_DNSMASQ_BLOCK=''
+if [[ -n "$raw_dnsmasq" ]]; then
+    EXTRA_DNSMASQ_BLOCK="$(printf '%s\n' "$raw_dnsmasq" | sed 's/^/      /')"
 fi
 
 echo "=== stage-router-artifacts.sh"
@@ -127,6 +211,7 @@ echo "  dhcp pool:    $DHCP_START .. $DHCP_END"
 echo "  admin user:   $USERNAME"
 echo "  pubkey:       $SSH_PUBKEY_FILE"
 echo "  stage dir:    $STAGE_DIR"
+echo "  config:       ${CONFIG_FILE:-<none>}"
 echo "  extra dnsmasq: ${EXTRA_DNSMASQ_FILE:-<none>}"
 
 # 1. base VHDX (shared across all router VMs)

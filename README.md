@@ -20,20 +20,28 @@ nftables, and dnsmasq. Hyper-V is the first supported hypervisor target.
 | `scripts/stage-router-artifacts.sh` | Mac-side artifact builder. Downloads/converts Debian cloud image and renders a NoCloud seed ISO. |
 | `templates/cloud-init/` | cloud-init templates for the router VM. |
 | `hypervisors/hyperv/New-LabRouter.ps1` | Creates a Hyper-V router VM from the staged VHDX and seed ISO. |
-| `configs/` | Example lab network configs and dnsmasq snippets. |
-| `docs/configuration.md` | Configuration model and planned runtime reconfigure path. |
+| `configs/` | Example YAML configs and dnsmasq snippets for `--config` / `--extra-dnsmasq`. |
+| `docs/configuration.md` | YAML schema and planned runtime reconfigure path. |
 
 ## Quick Start
+
+Prerequisite: `yq` on the Mac for YAML parsing (`brew install yq`). Not
+needed if you stick to CLI flags or `--extra-dnsmasq` raw snippets.
 
 From macOS:
 
 ```bash
-scripts/stage-router-artifacts.sh --extra-dnsmasq configs/samba-addc.dnsmasq.conf
+scripts/stage-router-artifacts.sh --config configs/samba-addc.yaml
 ```
 
+The YAML config supplies hostname, domain, LAN IP/prefix, DHCP pool, and
+renders DHCP reservations plus DNS delegations into the router's dnsmasq
+config. CLI flags still override any YAML field; `--extra-dnsmasq` still
+works for raw snippets and is merged in if you pass both.
+
 By default the admin user created on the router matches your current
-macOS user (`id -un`). Override with `--user name` if you want a different
-account inside the router VM.
+macOS user (`id -un`). Override in YAML (`router.user`) or via
+`--user name`.
 
 This writes the reusable base VHDX and seed ISO to `/Volumes/ISO` by default:
 
@@ -57,9 +65,12 @@ ssh -J <host-user>@<hyper-v-host> <user>@10.10.10.1 \
 
 ## Current Scope
 
-This project currently supports the single-LAN lab flow extracted from the
-Samba AD DC appliance lab. The next step is to move from command flags plus
-dnsmasq snippets to a small YAML config that can describe multiple LANs and
-VLAN interfaces while keeping the appliance simple.
+Single-LAN YAML configs are consumed today (see
+[`configs/samba-addc.yaml`](configs/samba-addc.yaml)). Multi-LAN configs
+like [`configs/multi-subnet-example.yaml`](configs/multi-subnet-example.yaml)
+are documented but not yet rendered - the stager errors out cleanly on
+multi-LAN input. VLAN trunking and runtime `apply-config.sh` are also
+planned but not implemented.
 
-See `docs/configuration.md` for the target config shape.
+See [`docs/configuration.md`](docs/configuration.md) for the full schema
+and the target runtime-reconfigure workflow.
