@@ -1,14 +1,15 @@
 #cloud-config
 # Template consumed by lab/stage-router-artifacts.sh
 # Placeholders: @@HOSTNAME@@ @@FQDN@@ @@DOMAIN@@ @@LAN_IP@@ @@LAN_SUBNET_CIDR@@
-#               @@DHCP_START@@ @@DHCP_END@@ @@SSH_PUBKEY@@ @@EXTRA_DNSMASQ@@
+#               @@DHCP_START@@ @@DHCP_END@@ @@SSH_PUBKEY@@ @@USERNAME@@
+#               @@EXTRA_DNSMASQ@@
 
 hostname: @@HOSTNAME@@
 fqdn: @@FQDN@@
 manage_etc_hosts: true
 
 users:
-  - name: hm
+  - name: @@USERNAME@@
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: [sudo, adm]
     shell: /bin/bash

@@ -32,6 +32,7 @@ LAN_PREFIX='24'
 DOMAIN='lab.test'
 DHCP_START=''   # auto-derived if empty
 DHCP_END=''
+USERNAME="$(id -un)"
 SSH_PUBKEY_FILE="$HOME/.ssh/id_ed25519.pub"
 STAGE_DIR='/Volumes/ISO'
 DEBIAN_URL='https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2'
@@ -53,6 +54,8 @@ Options:
   -d, --domain NAME        DNS search domain (default: $DOMAIN)
       --dhcp-start IP      DHCP pool start (default: derive .100 of subnet)
       --dhcp-end IP        DHCP pool end   (default: derive .200 of subnet)
+  -u, --user NAME          admin username to create on the router
+                           (default: current user, $USERNAME)
   -k, --pubkey FILE        SSH public key path (default: $SSH_PUBKEY_FILE)
   -s, --stage-dir DIR      staging dir (default: $STAGE_DIR)
       --extra-dnsmasq FILE file whose content is inlined into dnsmasq config
@@ -72,6 +75,7 @@ while [[ $# -gt 0 ]]; do
         -d|--domain)      DOMAIN="$2";          shift 2 ;;
         --dhcp-start)     DHCP_START="$2";      shift 2 ;;
         --dhcp-end)       DHCP_END="$2";        shift 2 ;;
+        -u|--user)        USERNAME="$2";        shift 2 ;;
         -k|--pubkey)      SSH_PUBKEY_FILE="$2"; shift 2 ;;
         -s|--stage-dir)   STAGE_DIR="$2";       shift 2 ;;
         --extra-dnsmasq)  EXTRA_DNSMASQ_FILE="$2"; shift 2 ;;
@@ -120,6 +124,7 @@ echo "  fqdn:         $FQDN"
 echo "  lan:          $LAN_IP/$LAN_PREFIX  (subnet $LAN_SUBNET_CIDR)"
 echo "  domain:       $DOMAIN"
 echo "  dhcp pool:    $DHCP_START .. $DHCP_END"
+echo "  admin user:   $USERNAME"
 echo "  pubkey:       $SSH_PUBKEY_FILE"
 echo "  stage dir:    $STAGE_DIR"
 echo "  extra dnsmasq: ${EXTRA_DNSMASQ_FILE:-<none>}"
@@ -169,6 +174,7 @@ substitute() {
         -e "s|@@LAN_SUBNET_CIDR@@|$LAN_SUBNET_CIDR|g" \
         -e "s|@@DHCP_START@@|$DHCP_START|g" \
         -e "s|@@DHCP_END@@|$DHCP_END|g" \
+        -e "s|@@USERNAME@@|$USERNAME|g" \
         -e "s|@@SSH_PUBKEY@@|$PUBKEY_CONTENT|g" \
         "$1"
 }
@@ -201,5 +207,5 @@ echo "-> wrote $SEED_OUT ($(du -h "$SEED_OUT" | cut -f1))"
 
 echo ""
 echo "done. Build the VM with:"
-echo "  ssh nmadmin@server 'pwsh -File D:\\ISO\\lab-scripts\\New-LabRouter.ps1 \\"
+echo "  ssh <host-user>@<hyper-v-host> 'pwsh -File D:\\ISO\\lab-scripts\\New-LabRouter.ps1 \\"
 echo "      -VMName $HOSTNAME -SeedIso D:\\ISO\\${HOSTNAME}-seed.iso'"

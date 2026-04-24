@@ -31,22 +31,28 @@ From macOS:
 scripts/stage-router-artifacts.sh --extra-dnsmasq configs/samba-addc.dnsmasq.conf
 ```
 
+By default the admin user created on the router matches your current
+macOS user (`id -un`). Override with `--user name` if you want a different
+account inside the router VM.
+
 This writes the reusable base VHDX and seed ISO to `/Volumes/ISO` by default:
 
 - `/Volumes/ISO/debian-13-router-base.vhdx`
 - `/Volumes/ISO/router1-seed.iso`
 
-Copy the Hyper-V script to the host share if needed, then build the VM:
+Copy the Hyper-V script to the host share if needed, then build the VM
+(replace `<host-user>` and `<hyper-v-host>` with your own):
 
 ```bash
 cp hypervisors/hyperv/New-LabRouter.ps1 /Volumes/ISO/lab-scripts/
-ssh nmadmin@server 'pwsh -File D:\ISO\lab-scripts\New-LabRouter.ps1'
+ssh <host-user>@<hyper-v-host> 'pwsh -File D:\ISO\lab-scripts\New-LabRouter.ps1'
 ```
 
-Verify:
+Verify (replace `<user>` with the admin username you passed to the stager):
 
 ```bash
-ssh -J nmadmin@server hm@10.10.10.1 'cat /var/log/router-ready.marker; sudo nft list table ip nat'
+ssh -J <host-user>@<hyper-v-host> <user>@10.10.10.1 \
+    'cat /var/log/router-ready.marker; sudo nft list table ip nat'
 ```
 
 ## Current Scope
