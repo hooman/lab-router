@@ -4,3 +4,8 @@
 *.qcow2
 *.vhdx
 *.log
+.claude/
+.codex/
+.cursor/
+.continue/
+.aider*
